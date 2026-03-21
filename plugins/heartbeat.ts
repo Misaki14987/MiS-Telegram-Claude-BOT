@@ -1,6 +1,7 @@
 import type { Plugin } from "../src/plugin.js";
 
 const HEARTBEAT_INTERVAL = 60_000; // 1 min
+const startTime = Date.now();
 
 const plugin: Plugin = {
   name: "Heartbeat",
@@ -61,7 +62,5 @@ const plugin: Plugin = {
     });
   },
 };
-
-const startTime = Date.now();
 
 export default plugin;

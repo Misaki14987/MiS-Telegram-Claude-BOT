@@ -21,6 +21,7 @@ export class ClaudeSession {
   private workDir: string;
   private model: string;
   private abortController: AbortController | null = null;
+  systemPrompt: string = "";
 
   constructor(approvalQueue: ApprovalQueue, workDir: string, model = "sonnet") {
     this.approvalQueue = approvalQueue;
@@ -54,10 +55,14 @@ export class ClaudeSession {
     this.abortController = new AbortController();
     const { signal } = this.abortController;
 
-    const claudePath = process.env.CLAUDE_PATH 
+    const fullPrompt = this.systemPrompt
+      ? `<system>\n${this.systemPrompt}\n</system>\n\n${prompt}`
+      : prompt;
+
+    const claudePath = process.env.CLAUDE_PATH;
 
     const options: Record<string, unknown> = {
-      pathToClaudeCodeExecutable: claudePath,
+      ...(claudePath && { pathToClaudeCodeExecutable: claudePath }),
       model: this.model,
       permissionMode: "default",
       cwd: this.workDir,
@@ -101,7 +106,7 @@ export class ClaudeSession {
 
     try {
       let resultText = "";
-      for await (const message of query({ prompt, options: options as any })) {
+      for await (const message of query({ prompt: fullPrompt, options: options as any })) {
         if (message.type === "system" && (message as any).subtype === "init") {
           this.sessionId = (message as any).session_id;
         }

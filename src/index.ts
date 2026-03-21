@@ -106,8 +106,11 @@ bot.onText(/\/start/, (msg) => {
 
 bot.onText(/\/stop/, (msg) => {
   if (!isAllowed(msg.from!.id, ALLOWED_USERS)) return;
-  const session = getSession(msg.from!.id);
-  if (session.isRunning) {
+  const userId = msg.from!.id;
+  const session = getSession(userId);
+  const wasBusy = busyUsers.has(userId);
+  busyUsers.delete(userId);
+  if (session.isRunning || wasBusy) {
     session.abort();
     bot.sendMessage(msg.chat.id, "⏹ Stopped. Next message continues the conversation.");
   } else {
@@ -330,19 +333,8 @@ bot.on("callback_query", async (cbQuery) => {
   // --- AskUserQuestion: option selected ---
   if (action === "qopt" && cbQuery.from) {
     const session = getSession(cbQuery.from.id);
-    const selectedLabel = idParts.slice(1).join(":");
-    const qId = idParts[0];
-    const fullId = `${action}:${approvalId}`;
-    // Reconstruct the original questionId: "question_N_timestamp"
-    // approvalId = everything after "qopt:", which is "questionId:label"
-    // But we encoded as `qopt:${questionId}:${label}` and split on ":"
-    // So idParts = [questionId_part1, questionId_part2, ...label_parts]
-    // questionId format: question_N_timestamp — has exactly 2 underscores, split by ":"
-    // Actually the callback_data is `qopt:${questionId}:${optLabel}` truncated to 64
-    // and we split cbQuery.data on ":" → [action, ...idParts]
-    // So idParts[0] is everything of questionId before any ":", but questionId has no ":"
-    // Wait — questionId = `question_${counter}_${timestamp}` — no colons.
-    // So idParts = [questionId, ...labelParts], and label = labelParts.join(":")
+    // callback_data format: `qopt:${questionId}:${label}`
+    // questionId = `question_${counter}_${timestamp}` — contains no colons
     const questionId = idParts[0];
     const label = idParts.slice(1).join(":");
     const pending = session.questionQueue.get(questionId);
