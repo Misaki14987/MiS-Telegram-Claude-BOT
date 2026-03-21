@@ -189,7 +189,7 @@ bot.on("message", async (msg) => {
 
   try {
     await session.run(msg.text, {
-      onText: (text) => stream.append(`\n💬 ${escapeHtml(text.slice(0, 500))}`),
+      onText: (text) => stream.append(`\n💬 ${mdToTelegramHtml(text)}`),
       onToolUse: (toolName, input) => stream.append(formatToolCall(toolName, input)),
       onApprovalNeeded: (id, toolName, input) => {
         bot.sendMessage(chatId, `⚠️ <b>Permission required:</b>\n\n${formatToolCall(toolName, input)}`, {
