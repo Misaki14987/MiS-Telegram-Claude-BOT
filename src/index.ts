@@ -1,6 +1,7 @@
 import "dotenv/config";
 import TelegramBot from "node-telegram-bot-api";
 import { ApprovalQueue } from "./approval.js";
+import type { QuestionItem } from "./approval.js";
 import { ClaudeSession } from "./claude-session.js";
 import { loadPlugins } from "./plugin-loader.js";
 import type { Plugin } from "./plugin.js";
@@ -168,6 +169,55 @@ bot.onText(/\/plugins/, (msg) => {
   bot.sendMessage(msg.chat.id, `<b>Plugins (${loadedPlugins.length}):</b>\n${lines.join("\n")}`, HTML);
 });
 
+// --- AskUserQuestion helpers ---
+
+function buildQuestionKeyboard(
+  questionId: string,
+  q: QuestionItem,
+  selectedLabels?: Set<string>
+): TelegramBot.InlineKeyboardButton[][] {
+  const rows: TelegramBot.InlineKeyboardButton[][] = [];
+  for (const opt of q.options) {
+    const isSelected = selectedLabels?.has(opt.label);
+    const prefix = q.multiSelect ? (isSelected ? "☑ " : "☐ ") : "";
+    rows.push([{
+      text: `${prefix}${opt.label}`,
+      callback_data: `qopt:${questionId}:${opt.label}`.slice(0, 64),
+    }]);
+  }
+  // "Other" option for custom text input
+  rows.push([{
+    text: "✏️ Other...",
+    callback_data: `qtext:${questionId}`,
+  }]);
+  if (q.multiSelect) {
+    rows.push([{
+      text: "✅ Confirm selection",
+      callback_data: `qconfirm:${questionId}`,
+    }]);
+  }
+  return rows;
+}
+
+function formatQuestion(q: QuestionItem): string {
+  let text = `❓ <b>${escapeHtml(q.header)}</b>\n\n${escapeHtml(q.question)}`;
+  for (const opt of q.options) {
+    text += `\n\n• <b>${escapeHtml(opt.label)}</b>`;
+    if (opt.description) text += ` — ${escapeHtml(opt.description)}`;
+  }
+  return text;
+}
+
+function sendQuestionToChat(chatId: number, questionId: string, q: QuestionItem): void {
+  bot.sendMessage(chatId, formatQuestion(q), {
+    ...HTML,
+    reply_markup: { inline_keyboard: buildQuestionKeyboard(questionId, q) },
+  });
+}
+
+/** Track which chatId each question belongs to */
+const questionChatMap = new Map<string, number>();
+
 // --- Messages → Claude ---
 
 bot.on("message", async (msg) => {
@@ -177,18 +227,44 @@ bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from!.id;
 
+  // Check if this is a text answer for an AskUserQuestion "Other" option
+  const session = sessions.get(userId);
+  if (session) {
+    const waiting = session.questionQueue.findWaitingForText();
+    if (waiting) {
+      const { id: questionId, entry: pending } = waiting;
+      const q = pending.questions[pending.currentIndex];
+      if (q.multiSelect) {
+        // For multiSelect, add the custom text and keep the question open
+        session.questionQueue.toggleMulti(questionId, msg.text);
+        session.questionQueue.setWaitingForText(questionId, false);
+        const selected = pending.multiAnswers[q.question] || new Set();
+        bot.sendMessage(chatId, `Added: <b>${escapeHtml(msg.text)}</b>\nCurrent: ${[...selected].map(s => escapeHtml(s)).join(", ") || "(none)"}`, HTML);
+      } else {
+        const nextIdx = session.questionQueue.answerCurrent(questionId, msg.text);
+        bot.sendMessage(chatId, `→ <b>${escapeHtml(msg.text)}</b>`, HTML);
+        if (nextIdx >= 0) {
+          sendQuestionToChat(chatId, questionId, pending.questions[nextIdx]);
+        } else {
+          questionChatMap.delete(questionId);
+        }
+      }
+      return;
+    }
+  }
+
   if (busyUsers.has(userId)) {
     bot.sendMessage(chatId, "Claude is still working. Please wait.");
     return;
   }
 
   busyUsers.add(userId);
-  const session = getSession(userId);
+  const activeSession = getSession(userId);
   const stream = new StreamingMessage(chatId);
   stream.append("⏳ <i>Working...</i>");
 
   try {
-    await session.run(msg.text, {
+    await activeSession.run(msg.text, {
       onText: (text) => stream.append(`\n💬 ${mdToTelegramHtml(text)}`),
       onToolUse: (toolName, input) => stream.append(formatToolCall(toolName, input)),
       onApprovalNeeded: (id, toolName, input) => {
@@ -199,6 +275,12 @@ bot.on("message", async (msg) => {
             { text: "❌ Deny", callback_data: `deny:${id}` },
           ]] },
         });
+      },
+      onQuestion: (id, questions) => {
+        questionChatMap.set(id, chatId);
+        if (questions.length > 0) {
+          sendQuestionToChat(chatId, id, questions[0]);
+        }
       },
       onToolNotify: (toolName, input) => stream.append(`✅ ${formatToolCall(toolName, input)}`),
       onDone: async (result, isError) => {
@@ -241,6 +323,106 @@ bot.on("callback_query", async (cbQuery) => {
           reply_markup: { inline_keyboard: [buttons] },
         });
       }
+    }
+    return;
+  }
+
+  // --- AskUserQuestion: option selected ---
+  if (action === "qopt" && cbQuery.from) {
+    const session = getSession(cbQuery.from.id);
+    const selectedLabel = idParts.slice(1).join(":");
+    const qId = idParts[0];
+    const fullId = `${action}:${approvalId}`;
+    // Reconstruct the original questionId: "question_N_timestamp"
+    // approvalId = everything after "qopt:", which is "questionId:label"
+    // But we encoded as `qopt:${questionId}:${label}` and split on ":"
+    // So idParts = [questionId_part1, questionId_part2, ...label_parts]
+    // questionId format: question_N_timestamp — has exactly 2 underscores, split by ":"
+    // Actually the callback_data is `qopt:${questionId}:${optLabel}` truncated to 64
+    // and we split cbQuery.data on ":" → [action, ...idParts]
+    // So idParts[0] is everything of questionId before any ":", but questionId has no ":"
+    // Wait — questionId = `question_${counter}_${timestamp}` — no colons.
+    // So idParts = [questionId, ...labelParts], and label = labelParts.join(":")
+    const questionId = idParts[0];
+    const label = idParts.slice(1).join(":");
+    const pending = session.questionQueue.get(questionId);
+    if (!pending) {
+      await bot.answerCallbackQuery(cbQuery.id, { text: "Expired." });
+      return;
+    }
+    const q = pending.questions[pending.currentIndex];
+
+    if (q.multiSelect) {
+      // Toggle and update keyboard
+      const selected = session.questionQueue.toggleMulti(questionId, label);
+      if (selected && cbQuery.message) {
+        await bot.answerCallbackQuery(cbQuery.id, { text: `${selected.has(label) ? "Selected" : "Deselected"}: ${label}` });
+        bot.editMessageReplyMarkup(
+          { inline_keyboard: buildQuestionKeyboard(questionId, q, selected) },
+          { chat_id: cbQuery.message.chat.id, message_id: cbQuery.message.message_id }
+        );
+      }
+    } else {
+      // Single select: answer and move on
+      await bot.answerCallbackQuery(cbQuery.id, { text: label });
+      const nextIdx = session.questionQueue.answerCurrent(questionId, label);
+      if (cbQuery.message) {
+        bot.editMessageText(`${formatQuestion(q)}\n\n→ <b>${escapeHtml(label)}</b>`, {
+          chat_id: cbQuery.message.chat.id, message_id: cbQuery.message.message_id, ...HTML,
+        });
+      }
+      if (nextIdx >= 0) {
+        const chatId = questionChatMap.get(questionId);
+        if (chatId) sendQuestionToChat(chatId, questionId, pending.questions[nextIdx]);
+      } else {
+        questionChatMap.delete(questionId);
+      }
+    }
+    return;
+  }
+
+  // --- AskUserQuestion: confirm multiSelect ---
+  if (action === "qconfirm" && cbQuery.from) {
+    const session = getSession(cbQuery.from.id);
+    const questionId = approvalId;
+    const pending = session.questionQueue.get(questionId);
+    if (!pending) {
+      await bot.answerCallbackQuery(cbQuery.id, { text: "Expired." });
+      return;
+    }
+    const q = pending.questions[pending.currentIndex];
+    const selected = pending.multiAnswers[q.question] || new Set();
+    const answer = [...selected].join(", ") || "(none)";
+    await bot.answerCallbackQuery(cbQuery.id, { text: "Confirmed" });
+    const nextIdx = session.questionQueue.confirmMulti(questionId);
+    if (cbQuery.message) {
+      bot.editMessageText(`${formatQuestion(q)}\n\n→ <b>${escapeHtml(answer)}</b>`, {
+        chat_id: cbQuery.message.chat.id, message_id: cbQuery.message.message_id, ...HTML,
+      });
+    }
+    if (nextIdx >= 0) {
+      const chatId = questionChatMap.get(questionId);
+      if (chatId) sendQuestionToChat(chatId, questionId, pending.questions[nextIdx]);
+    } else {
+      questionChatMap.delete(questionId);
+    }
+    return;
+  }
+
+  // --- AskUserQuestion: custom text ("Other") ---
+  if (action === "qtext" && cbQuery.from) {
+    const session = getSession(cbQuery.from.id);
+    const questionId = approvalId;
+    const pending = session.questionQueue.get(questionId);
+    if (!pending) {
+      await bot.answerCallbackQuery(cbQuery.id, { text: "Expired." });
+      return;
+    }
+    session.questionQueue.setWaitingForText(questionId, true);
+    await bot.answerCallbackQuery(cbQuery.id, { text: "Type your answer" });
+    const chatId = questionChatMap.get(questionId);
+    if (chatId) {
+      bot.sendMessage(chatId, "✏️ Please type your answer:", { reply_markup: { force_reply: true } });
     }
     return;
   }

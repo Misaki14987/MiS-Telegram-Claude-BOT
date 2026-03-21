@@ -1,5 +1,6 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { ApprovalQueue } from "./approval.js";
+import { ApprovalQueue, QuestionQueue } from "./approval.js";
+import type { QuestionItem } from "./approval.js";
 
 const AUTO_ALLOW = new Set(["Read", "Glob", "Grep", "LSP", "WebSearch", "WebFetch"]);
 const NOTIFY_ALLOW = new Set(["Write", "Edit", "NotebookEdit"]);
@@ -9,18 +10,21 @@ export interface SessionCallbacks {
   onToolUse: (toolName: string, input: Record<string, unknown>) => void;
   onApprovalNeeded: (id: string, toolName: string, input: Record<string, unknown>) => void;
   onToolNotify: (toolName: string, input: Record<string, unknown>) => void;
+  onQuestion: (id: string, questions: QuestionItem[]) => void;
   onDone: (result: string, isError: boolean) => void;
 }
 
 export class ClaudeSession {
   private sessionId: string | undefined;
   private approvalQueue: ApprovalQueue;
+  readonly questionQueue: QuestionQueue;
   private workDir: string;
   private model: string;
   private abortController: AbortController | null = null;
 
   constructor(approvalQueue: ApprovalQueue, workDir: string, model = "sonnet") {
     this.approvalQueue = approvalQueue;
+    this.questionQueue = new QuestionQueue();
     this.workDir = workDir;
     this.model = model;
   }
@@ -33,6 +37,7 @@ export class ClaudeSession {
     this.abortController?.abort();
     this.abortController = null;
     this.approvalQueue.denyAll();
+    this.questionQueue.denyAll();
   }
 
   clearSession(): void {
@@ -61,6 +66,19 @@ export class ClaudeSession {
         toolName: string,
         input: Record<string, unknown>
       ) => {
+        if (toolName === "AskUserQuestion") {
+          const rawQuestions = (input as any).questions as QuestionItem[] | undefined;
+          if (!rawQuestions || rawQuestions.length === 0) {
+            return { behavior: "allow", updatedInput: input };
+          }
+          const { id, promise } = this.questionQueue.createQuestion(rawQuestions);
+          cb.onQuestion(id, rawQuestions);
+          const answers = await promise;
+          return {
+            behavior: "allow" as const,
+            updatedInput: { ...input, answers },
+          };
+        }
         if (AUTO_ALLOW.has(toolName)) {
           return { behavior: "allow", updatedInput: input };
         }
