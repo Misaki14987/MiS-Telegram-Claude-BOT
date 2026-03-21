@@ -4,8 +4,7 @@
 为什么有Openclaw了还闲的没事写这个
 为什么A一串字母上线 **Channels** 功能，支持 **Telegram** 与 **Discord** 远程推送消息我还要整
 因为我感觉Openclaw有点史有点炒作，a一串字母出的这功能还只支持claude账号。我说我是用claude接kimi那我都用不了
-其实就是闲的
-
+自己造着玩的轻喷
 ## 安装
 
 1. [@BotFather](https://t.me/BotFather) 创建 bot，拿到 token
