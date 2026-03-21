@@ -3,7 +3,7 @@
   "version": "2.0.0",
   "type": "module",
   "scripts": {
-    "build": "tsc && ncc build dist/src/index.js -o build --source-map && cp -r dist/plugins build/plugins",
+    "build": "rm -rf dist build && tsc && ncc build dist/src/index.js -o build --source-map && cp -r dist/plugins build/plugins && rm -rf dist",
     "dev": "tsx src/index.ts",
     "start": "PLUGINS_DIR=./build/plugins node build/index.js",
     "test": "vitest run",

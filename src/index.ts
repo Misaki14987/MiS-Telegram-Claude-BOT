@@ -67,9 +67,12 @@ class StreamingMessage {
 
 // --- Built-in commands ---
 
+const MODELS = ["opus", "sonnet", "haiku"];
+
 const BUILTIN_COMMANDS = [
   { command: "stop", description: "Stop current task" },
   { command: "clear", description: "Start a new session" },
+  { command: "model", description: "Switch model (opus/sonnet/haiku)" },
   { command: "dir", description: "Switch working directory" },
   { command: "pwd", description: "Show current directory" },
   { command: "plugins", description: "List loaded plugins" },
@@ -127,6 +130,32 @@ bot.onText(/\/dir (.+)/, (msg, match) => {
 bot.onText(/\/pwd/, (msg) => {
   if (!isAllowed(msg.from!.id, ALLOWED_USERS)) return;
   bot.sendMessage(msg.chat.id, `Working directory: <code>${escapeHtml(getSession(msg.from!.id).getWorkDir())}</code>`, HTML);
+});
+
+bot.onText(/\/model(?:\s+(.+))?/, (msg, match) => {
+  if (!isAllowed(msg.from!.id, ALLOWED_USERS)) return;
+  const session = getSession(msg.from!.id);
+  const arg = match?.[1]?.trim();
+
+  if (!arg) {
+    const current = session.getModel();
+    const buttons = MODELS.map((m) => ({
+      text: m === current ? `✅ ${m}` : m,
+      callback_data: `model:${m}`,
+    }));
+    bot.sendMessage(msg.chat.id, `Current model: <b>${escapeHtml(current)}</b>`, {
+      ...HTML,
+      reply_markup: { inline_keyboard: [buttons] },
+    });
+    return;
+  }
+
+  if (MODELS.includes(arg)) {
+    session.setModel(arg);
+    bot.sendMessage(msg.chat.id, `Model: <b>${escapeHtml(arg)}</b>`, HTML);
+  } else {
+    bot.sendMessage(msg.chat.id, `Unknown model. Available: ${MODELS.join(", ")}`, HTML);
+  }
 });
 
 bot.onText(/\/plugins/, (msg) => {
@@ -195,6 +224,26 @@ bot.on("callback_query", async (cbQuery) => {
   if (!cbQuery.data) return;
   const [action, ...idParts] = cbQuery.data.split(":");
   const approvalId = idParts.join(":");
+
+  if (action === "model" && cbQuery.from) {
+    const model = approvalId;
+    if (MODELS.includes(model)) {
+      const session = getSession(cbQuery.from.id);
+      session.setModel(model);
+      await bot.answerCallbackQuery(cbQuery.id, { text: `Switched to ${model}` });
+      if (cbQuery.message) {
+        const buttons = MODELS.map((m) => ({
+          text: m === model ? `✅ ${m}` : m,
+          callback_data: `model:${m}`,
+        }));
+        bot.editMessageText(`Current model: <b>${escapeHtml(model)}</b>`, {
+          chat_id: cbQuery.message.chat.id, message_id: cbQuery.message.message_id, ...HTML,
+          reply_markup: { inline_keyboard: [buttons] },
+        });
+      }
+    }
+    return;
+  }
 
   if (action !== "approve" && action !== "deny") return;
   const allowed = action === "approve";

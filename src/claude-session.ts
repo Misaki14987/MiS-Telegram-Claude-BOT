@@ -42,6 +42,8 @@ export class ClaudeSession {
 
   setWorkDir(dir: string): void { this.workDir = dir; }
   getWorkDir(): string { return this.workDir; }
+  setModel(model: string): void { this.model = model; }
+  getModel(): string { return this.model; }
 
   async run(prompt: string, cb: SessionCallbacks): Promise<void> {
     this.abortController = new AbortController();
