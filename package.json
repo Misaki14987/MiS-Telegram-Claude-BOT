@@ -3,8 +3,9 @@
   "version": "2.0.0",
   "type": "module",
   "scripts": {
+    "build": "tsc && ncc build dist/src/index.js -o build --source-map && cp -r dist/plugins build/plugins",
     "dev": "tsx src/index.ts",
-    "start": "node --import tsx src/index.ts",
+    "start": "PLUGINS_DIR=./build/plugins node build/index.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -15,6 +16,7 @@
   },
   "devDependencies": {
     "@types/node-telegram-bot-api": "^0.64.7",
+    "@vercel/ncc": "^0.38.4",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^3.1.0"
