@@ -49,7 +49,10 @@ export class ClaudeSession {
     this.abortController = new AbortController();
     const { signal } = this.abortController;
 
+    const claudePath = process.env.CLAUDE_PATH 
+
     const options: Record<string, unknown> = {
+      pathToClaudeCodeExecutable: claudePath,
       model: this.model,
       permissionMode: "default",
       cwd: this.workDir,

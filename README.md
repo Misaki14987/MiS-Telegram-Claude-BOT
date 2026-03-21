@@ -4,7 +4,7 @@
 为什么有Openclaw了还闲的没事写这个
 为什么A一串字母上线 **Channels** 功能，支持 **Telegram** 与 **Discord** 远程推送消息我还要整
 因为我感觉Openclaw有点史有点炒作，a一串字母出的这功能还只支持claude账号。我说我是用claude接kimi那我都用不了
-其实就是闲的没事哈哈
+其实就是闲的
 
 ## 安装
 
@@ -16,6 +16,10 @@ cp .env.example .env
 # 编辑 .env 填入 TELEGRAM_BOT_TOKEN, ALLOWED_USER_IDS, WORK_DIR, NOTIFY_CHAT_ID
 npm install && npm run dev
 ```
+## Notice
+
+确保环境中有node，以及能够访问到Telegram, 以及你ClaudeCode
+
 ## 环境变量
 
 | 变量 | 说明 |
@@ -30,6 +34,7 @@ npm install && npm run dev
 
 | 命令 | 说明 |
 |------|------|
+| `/model` | 切换模型 (opus/sonnet/haiku) |
 | `/stop` | 停止当前任务 |
 | `/clear` | 清除会话 |
 | `/dir <path>` | 切换工作目录 |

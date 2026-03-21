@@ -203,12 +203,12 @@ bot.on("message", async (msg) => {
       onToolNotify: (toolName, input) => stream.append(`✅ ${formatToolCall(toolName, input)}`),
       onDone: async (result, isError) => {
         busyUsers.delete(userId);
-        stream.append(isError ? "\n❌ <b>Done (with errors)</b>" : "\n✅ <b>Done</b>");
-        stream.forceFlush();
-        const html = mdToTelegramHtml(isError ? `❌ ${result}` : result);
-        for (const part of splitMessage(html)) {
-          await bot.sendMessage(chatId, part, HTML);
+        if (isError) {
+          stream.append(`\n❌ <b>Error:</b> ${escapeHtml(result.slice(0, 500))}`);
+        } else {
+          stream.append("\n✅ <b>Done</b>");
         }
+        stream.forceFlush();
       },
     });
   } catch (err: any) {
