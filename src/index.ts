@@ -5,7 +5,7 @@ import type { QuestionItem } from "./approval.js";
 import { ClaudeSession } from "./claude-session.js";
 import { loadPlugins } from "./plugin-loader.js";
 import type { Plugin } from "./plugin.js";
-import { splitMessage, isAllowed, parseUserIds, formatToolCall, escapeHtml, mdToTelegramHtml } from "./utils.js";
+import { isAllowed, parseUserIds, formatToolCall, escapeHtml, mdToTelegramHtml } from "./utils.js";
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 if (!TELEGRAM_TOKEN) { console.error("Missing TELEGRAM_BOT_TOKEN in .env"); process.exit(1); }
@@ -30,7 +30,8 @@ function getSession(userId: number): ClaudeSession {
 class StreamingMessage {
   private chatId: number;
   private messageId: number | null = null;
-  private lines: string[] = [];
+  private prefix: string[] = [];   
+  private rawText = "";             
   private pendingFlush = false;
   private lastFlushTime = 0;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -38,7 +39,12 @@ class StreamingMessage {
   constructor(chatId: number) { this.chatId = chatId; }
 
   append(line: string): void {
-    this.lines.push(line);
+    this.prefix.push(line);
+    this.scheduleFlush();
+  }
+
+  appendRaw(chunk: string): void {
+    this.rawText += chunk;
     this.scheduleFlush();
   }
 
@@ -56,7 +62,8 @@ class StreamingMessage {
   }
 
   private flush(): void {
-    const text = this.lines.join("\n").slice(0, 4096) || "⏳";
+    const body = this.rawText ? `\n💬 ${mdToTelegramHtml(this.rawText)}` : "";
+    const text = (this.prefix.join("\n") + body).slice(0, 4096) || "⏳";
     this.lastFlushTime = Date.now();
     if (this.messageId === null) {
       bot.sendMessage(this.chatId, text, HTML).then((s) => { this.messageId = s.message_id; }).catch(() => {});
@@ -66,7 +73,6 @@ class StreamingMessage {
   }
 }
 
-// --- Built-in commands ---
 
 const MODELS = ["opus", "sonnet", "haiku"];
 
@@ -268,7 +274,7 @@ bot.on("message", async (msg) => {
 
   try {
     await activeSession.run(msg.text, {
-      onText: (text) => stream.append(`\n💬 ${mdToTelegramHtml(text)}`),
+      onText: (chunk) => stream.appendRaw(chunk),
       onToolUse: (toolName, input) => stream.append(formatToolCall(toolName, input)),
       onApprovalNeeded: (id, toolName, input) => {
         bot.sendMessage(chatId, `⚠️ <b>Permission required:</b>\n\n${formatToolCall(toolName, input)}`, {

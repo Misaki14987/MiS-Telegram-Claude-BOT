@@ -35,6 +35,46 @@ export function escapeHtml(text: string): string {
     .replace(/>/g, "&gt;");
 }
 
+function renderMdTable(tableText: string): string {
+  const lines = tableText.trim().split("\n");
+
+  // 解析各行，跳过分隔行（只含 -、:、|、空格）
+  const rows: string[][] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("|")) continue;
+    if (/^\|[\s\-:|]+\|$/.test(trimmed)) continue; // 分隔行
+    const cells = trimmed.split("|").slice(1, -1).map((c) => c.trim());
+    rows.push(cells);
+  }
+
+  if (rows.length === 0) return tableText;
+
+  const colCount = Math.max(...rows.map((r) => r.length));
+  const colWidths: number[] = Array(colCount).fill(0);
+  for (const row of rows) {
+    for (let i = 0; i < colCount; i++) {
+      colWidths[i] = Math.max(colWidths[i], (row[i] ?? "").length);
+    }
+  }
+
+  const hline = (l: string, m: string, r: string) =>
+    l + colWidths.map((w) => "─".repeat(w + 2)).join(m) + r;
+  const renderRow = (row: string[]) =>
+    "│" + colWidths.map((w, i) => ` ${(row[i] ?? "").padEnd(w)} `).join("│") + "│";
+
+  const out: string[] = [];
+  out.push(hline("┌", "┬", "┐"));
+  out.push(renderRow(rows[0]));
+  if (rows.length > 1) {
+    out.push(hline("├", "┼", "┤"));
+    for (let i = 1; i < rows.length; i++) out.push(renderRow(rows[i]));
+  }
+  out.push(hline("└", "┴", "┘"));
+
+  return `<pre><code>${escapeHtml(out.join("\n"))}</code></pre>`;
+}
+
 export function mdToTelegramHtml(text: string): string {
   const codeBlocks: string[] = [];
   let result = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, lang, code) => {
@@ -51,11 +91,41 @@ export function mdToTelegramHtml(text: string): string {
     return `\x00IC${i}\x00`;
   });
 
+  const tables: string[] = [];
+  result = result.replace(/^(?:\|.+\n)+/gm, (match) => {
+    const hasSep = match.split("\n").some((l) => /^\|[\s\-:|]+\|$/.test(l.trim()));
+    if (!hasSep) return match;
+    const i = tables.length;
+    tables.push(renderMdTable(match));
+    return `\x00TB${i}\x00\n`;
+  });
+
+  const links: string[] = [];
+  result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, linkText, url) => {
+    const i = links.length;
+    links.push(`<a href="${escapeHtml(url)}">${escapeHtml(linkText)}</a>`);
+    return `\x00LK${i}\x00`;
+  });
+
   result = escapeHtml(result);
-  result = result.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
-  result = result.replace(/__(.+?)__/g, "<b>$1</b>");
+
+  result = result.replace(/^### (.+)$/gm, "<b>$1</b>");
+  result = result.replace(/^## (.+)$/gm, "\n<b>$1</b>");
+  result = result.replace(/^# (.+)$/gm, "\n<b>$1</b>\n");
+
+  result = result.replace(/^[ \t]*(\-{3,}|\*{3,}|_{3,})[ \t]*$/gm, "──────────────────");
+
+  result = result.replace(/^&gt; (.+)$/gm, "<blockquote>$1</blockquote>");
+
+  result = result.replace(/~~(.+?)~~/g, "<s>$1</s>");
+
+  result = result.replace(/\*\*(.+?)\*\*/gs, "<b>$1</b>");
+  result = result.replace(/__(.+?)__/gs, "<b>$1</b>");
   result = result.replace(/(?<!\w)\*(.+?)\*(?!\w)/g, "<i>$1</i>");
   result = result.replace(/(?<!\w)_(.+?)_(?!\w)/g, "<i>$1</i>");
+
+  result = result.replace(/\x00LK(\d+)\x00/g, (_m, i) => links[parseInt(i)]);
+  result = result.replace(/\x00TB(\d+)\x00/g, (_m, i) => tables[parseInt(i)]);
   result = result.replace(/\x00CB(\d+)\x00/g, (_m, i) => codeBlocks[parseInt(i)]);
   result = result.replace(/\x00IC(\d+)\x00/g, (_m, i) => inlineCodes[parseInt(i)]);
 
