@@ -1,10 +1,7 @@
 # Telegram → Claude Code Bridge
 
 哈哈造史中
-为什么有Openclaw了还闲的没事写这个
-为什么A一串字母上线 **Channels** 功能，支持 **Telegram** 与 **Discord** 远程推送消息我还要整
-因为我感觉Openclaw有点史有点炒作，a一串字母出的这功能还只支持claude账号。我说我是用claude接kimi那我都用不了
-自己造着玩的轻喷
+类似ClaudeCode推出的Channel。不同的是本项目是在本地命令行启动ClaudeCode，所以可以不使用Claude账号
 ## 安装
 
 1. [@BotFather](https://t.me/BotFather) 创建 bot，拿到 token
