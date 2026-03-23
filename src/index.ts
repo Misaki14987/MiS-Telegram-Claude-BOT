@@ -15,7 +15,26 @@ const WORK_DIR = process.env.WORK_DIR || process.env.HOME || "/home";
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || "sonnet";
 const HTML = { parse_mode: "HTML" as const };
 
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
+const bot = new TelegramBot(TELEGRAM_TOKEN, {
+  polling: {
+    autoStart: true,
+    params: { timeout: 30 },
+  },
+});
+
+// Auto-recover from polling errors (DNS failures, network drops)
+bot.on("polling_error", (err: Error & { code?: string }) => {
+  console.error(`Polling error: ${err.message}`);
+  if (err.code === "EFATAL") {
+    console.log("Fatal polling error, restarting in 10s...");
+    setTimeout(() => {
+      bot.stopPolling().then(() => bot.startPolling()).catch(() => {
+        console.error("Failed to restart polling, exiting...");
+        process.exit(1); // Let systemd restart us
+      });
+    }, 10_000);
+  }
+});
 const approvalQueue = new ApprovalQueue();
 const sessions = new Map<number, ClaudeSession>();
 const busyUsers = new Set<number>();
@@ -83,6 +102,8 @@ const BUILTIN_COMMANDS = [
   { command: "dir", description: "Switch working directory" },
   { command: "pwd", description: "Show current directory" },
   { command: "plugins", description: "List loaded plugins" },
+  { command: "restart", description: "Restart the bot process" },
+  { command: "status", description: "Show bot status" },
 ];
 
 let loadedPlugins: Plugin[] = [];
@@ -178,6 +199,33 @@ bot.onText(/\/plugins/, (msg) => {
   bot.sendMessage(msg.chat.id, `<b>Plugins (${loadedPlugins.length}):</b>\n${lines.join("\n")}`, HTML);
 });
 
+const startTime = Date.now();
+
+bot.onText(/\/restart/, async (msg) => {
+  if (!isAllowed(msg.from!.id, ALLOWED_USERS)) return;
+  await bot.sendMessage(msg.chat.id, "♻️ Restarting...");
+  process.exit(0); // systemd Restart=always will bring it back
+});
+
+bot.onText(/\/status/, (msg) => {
+  if (!isAllowed(msg.from!.id, ALLOWED_USERS)) return;
+  const uptimeSec = Math.floor((Date.now() - startTime) / 1000);
+  const h = Math.floor(uptimeSec / 3600);
+  const m = Math.floor((uptimeSec % 3600) / 60);
+  const s = uptimeSec % 60;
+  const memMB = Math.round(process.memoryUsage.rss() / 1024 / 1024);
+  const lines = [
+    `<b>Bot Status</b>`,
+    `Uptime: ${h}h ${m}m ${s}s`,
+    `Memory: ${memMB} MB`,
+    `Model: ${CLAUDE_MODEL}`,
+    `Plugins: ${loadedPlugins.length}`,
+    `Active sessions: ${sessions.size}`,
+    `Busy users: ${busyUsers.size}`,
+  ];
+  bot.sendMessage(msg.chat.id, lines.join("\n"), HTML);
+});
+
 // --- AskUserQuestion helpers ---
 
 function buildQuestionKeyboard(
@@ -229,9 +277,29 @@ const questionChatMap = new Map<string, number>();
 
 // --- Messages → Claude ---
 
+/** 内置命令集合，以 / 开头的消息若匹配则不转发给 Claude */
+const BUILTIN_COMMAND_NAMES = new Set(BUILTIN_COMMANDS.map((c) => c.command));
+
+/**
+ * 将 Telegram 消息文本转为实际发给 Claude 的 prompt。
+ * - 普通文本：原样返回
+ * - /skill-name [args]：非内置命令视为 skill 调用，转为 "/skill-name args" 传给 Claude Code
+ * - 内置命令：返回 null（由各自的 bot.onText 处理）
+ */
+function resolvePrompt(text: string): string | null {
+  if (!text.startsWith("/")) return text;
+  const [command, ...rest] = text.slice(1).split(/\s+/);
+  const cmdName = command.toLowerCase();
+  if (BUILTIN_COMMAND_NAMES.has(cmdName)) return null;
+  // 非内置命令 → 作为 skill 调用转发给 Claude，保留原始 slash 格式
+  return rest.length > 0 ? `/${cmdName} ${rest.join(" ")}` : `/${cmdName}`;
+}
+
 bot.on("message", async (msg) => {
-  if (!msg.text || msg.text.startsWith("/")) return;
+  if (!msg.text) return;
   if (!isAllowed(msg.from!.id, ALLOWED_USERS)) return;
+  const prompt = resolvePrompt(msg.text);
+  if (prompt === null) return; // 内置命令，交给 bot.onText 处理
 
   const chatId = msg.chat.id;
   const userId = msg.from!.id;
@@ -273,7 +341,7 @@ bot.on("message", async (msg) => {
   stream.append("⏳ <i>Working...</i>");
 
   try {
-    await activeSession.run(msg.text, {
+    await activeSession.run(prompt, {
       onText: (chunk) => stream.appendRaw(chunk),
       onToolUse: (toolName, input) => stream.append(formatToolCall(toolName, input)),
       onApprovalNeeded: (id, toolName, input) => {
@@ -450,6 +518,18 @@ async function main() {
   console.log(`Bot running | dir: ${WORK_DIR} | model: ${CLAUDE_MODEL} | plugins: ${loadedPlugins.length}`);
   if (ALLOWED_USERS.size > 0) console.log(`Allowed users: ${[...ALLOWED_USERS].join(", ")}`);
   else console.log("Warning: No ALLOWED_USER_IDS set, anyone can use this bot!");
+
+  // Systemd watchdog: send heartbeat at half the WatchdogSec interval
+  const wdUsec = parseInt(process.env.WATCHDOG_USEC || "0", 10);
+  if (wdUsec > 0) {
+    const intervalMs = Math.floor(wdUsec / 1000 / 2);
+    const { exec } = await import("child_process");
+    setInterval(() => {
+      exec("systemd-notify --ready WATCHDOG=1");
+    }, intervalMs);
+    exec("systemd-notify --ready");
+    console.log(`Watchdog enabled (interval: ${intervalMs}ms)`);
+  }
 }
 
 main();

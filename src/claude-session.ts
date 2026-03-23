@@ -128,6 +128,13 @@ export class ClaudeSession {
         }
       }
     } catch (err: any) {
+      // If resume failed (stale session), clear and retry once
+      if (this.sessionId && !signal.aborted && err.message?.includes("session")) {
+        console.log("Session expired, starting fresh...");
+        this.sessionId = undefined;
+        this.abortController = null;
+        return this.run(prompt, cb);
+      }
       cb.onDone(signal.aborted ? "Stopped by user." : `Error: ${err.message}`, !signal.aborted);
     } finally {
       this.abortController = null;

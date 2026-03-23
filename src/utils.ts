@@ -1,20 +1,3 @@
-export function splitMessage(text: string, limit = 4096): string[] {
-  if (text.length <= limit) return [text];
-  const parts: string[] = [];
-  let remaining = text;
-  while (remaining.length > 0) {
-    if (remaining.length <= limit) {
-      parts.push(remaining);
-      break;
-    }
-    let splitAt = remaining.lastIndexOf("\n", limit);
-    if (splitAt <= 0) splitAt = limit;
-    parts.push(remaining.slice(0, splitAt));
-    remaining = remaining.slice(splitAt);
-  }
-  return parts;
-}
-
 export function isAllowed(userId: number, allowedUsers: Set<number>): boolean {
   return allowedUsers.size === 0 || allowedUsers.has(userId);
 }
@@ -136,17 +119,53 @@ export function formatToolCall(
   toolName: string,
   input: Record<string, unknown>
 ): string {
-  let s = `🔧 <b>${escapeHtml(toolName)}</b>`;
+  const ICONS: Record<string, string> = {
+    Bash: "⚡", Write: "📄", Edit: "✏️", Read: "📖",
+    Glob: "🔍", Grep: "🔎", Agent: "🤖", WebFetch: "🌐",
+    WebSearch: "🌐", TodoWrite: "📝", NotebookEdit: "📓",
+  };
+  const icon = ICONS[toolName] ?? "🔧";
+
+  let summary = "";  // 始终可见的摘要（文件名等）
+  let detail = "";   // spoiler 内的详细内容
+
   if (toolName === "Bash" && input.command) {
-    s += `\n<code>$ ${escapeHtml(String(input.command))}</code>`;
-  } else if ((toolName === "Write" || toolName === "Edit" || toolName === "Read") && input.file_path) {
-    const icon = toolName === "Write" ? "📄" : toolName === "Edit" ? "✏️" : "📖";
-    s += `\n${icon} <code>${escapeHtml(String(input.file_path))}</code>`;
+    const cmd = String(input.command);
+    summary = `<code>${escapeHtml(cmd.split("\n")[0].slice(0, 80))}</code>`;
+    if (cmd.length > 80 || cmd.includes("\n")) {
+      detail = `<code>$ ${escapeHtml(cmd.slice(0, 600))}</code>`;
+    }
+  } else if ((toolName === "Edit" || toolName === "Write" || toolName === "Read" || toolName === "NotebookEdit") && input.file_path) {
+    const filePath = String(input.file_path);
+    // 只显示最后两段路径，避免太长
+    const shortPath = filePath.split("/").slice(-2).join("/");
+    summary = `<code>${escapeHtml(shortPath)}</code>`;
+
+    if (toolName === "Edit" && input.old_string !== undefined && input.new_string !== undefined) {
+      const removed = String(input.old_string).slice(0, 400).trimEnd();
+      const added = String(input.new_string).slice(0, 400).trimEnd();
+      detail = [
+        `<code>${escapeHtml(filePath)}</code>`,
+        removed ? `<s>${escapeHtml(removed)}</s>` : "",
+        added ? `<b>${escapeHtml(added)}</b>` : "",
+      ].filter(Boolean).join("\n");
+    } else if (toolName === "Write" && input.content) {
+      const preview = String(input.content).slice(0, 600).trimEnd();
+      detail = `<code>${escapeHtml(filePath)}</code>\n<code>${escapeHtml(preview)}</code>`;
+    }
   } else {
     const keys = Object.keys(input).slice(0, 3);
     if (keys.length > 0) {
-      s += "\n" + keys.map((k) => `${escapeHtml(k)}: <code>${escapeHtml(String(input[k]).slice(0, 100))}</code>`).join("\n");
+      summary = keys
+        .map((k) => {
+          const v = input[k];
+          const s = typeof v === "object" && v !== null ? JSON.stringify(v) : String(v);
+          return `${escapeHtml(k)}: <code>${escapeHtml(s.slice(0, 80))}</code>`;
+        })
+        .join("  ");
     }
   }
-  return s;
+
+  const base = `${icon} <b>${escapeHtml(toolName)}</b>` + (summary ? ` ${summary}` : "");
+  return detail ? `${base}\n<tg-spoiler>${detail}</tg-spoiler>` : base;
 }

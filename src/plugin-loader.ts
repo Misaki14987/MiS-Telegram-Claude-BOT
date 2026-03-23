@@ -19,7 +19,9 @@ export async function loadPlugins(ctx: PluginContext): Promise<Plugin[]> {
   for (const file of files.filter((f) => f.endsWith(".ts") || f.endsWith(".js"))) {
     try {
       const fullPath = join(PLUGINS_DIR, file);
-      const mod = await import(pathToFileURL(fullPath).href);
+      // Use Function constructor to avoid ncc/webpack intercepting the dynamic import
+      const dynamicImport = new Function("url", "return import(url)") as (url: string) => Promise<any>;
+      const mod = await dynamicImport(pathToFileURL(fullPath).href);
       const plugin: Plugin = mod.default || mod;
       if (!plugin.name) continue;
 
